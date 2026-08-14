@@ -16,3 +16,15 @@ Planned flow:
 8. Live dashboard
 9. Observability
 10. Load and failure testing
+
+## Current Milestone 2 boundary
+
+```text
+StatsBomb adapter -> CanonicalEvent -> deterministic replay -> versioned JSON
+                                                        -> Kafka/Redpanda adapter
+                                                        -> validated CanonicalEvent
+```
+
+StatsBomb parsing and replay remain independent of the wire contract and broker
+adapter. Events for the same match use `match_id` as their broker key so they
+share a partition; this gives no ordering guarantee across different matches.

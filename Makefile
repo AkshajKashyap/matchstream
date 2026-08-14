@@ -1,4 +1,4 @@
-.PHONY: install test lint check
+.PHONY: install test lint check integration
 
 install:
 	python -m pip install -e ".[dev]"
@@ -10,3 +10,6 @@ lint:
 	ruff check .
 
 check: lint test
+
+integration:
+	pytest -q -o addopts='' -m integration

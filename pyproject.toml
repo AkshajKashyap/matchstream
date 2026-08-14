@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Real-time football analytics and event-streaming platform"
 requires-python = ">=3.11"
 
-dependencies = []
+dependencies = [
+    "confluent-kafka>=2.12,<3",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -23,6 +25,10 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: requires a running local Redpanda broker",
+]
 
 [tool.ruff]
 line-length = 100
