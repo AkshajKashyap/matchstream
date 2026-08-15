@@ -54,6 +54,15 @@ class _FakeMessage:
     def value(self) -> bytes:
         return self._value
 
+    def topic(self) -> str:
+        return "events"
+
+    def partition(self) -> int:
+        return 0
+
+    def offset(self) -> int:
+        return 0
+
 
 class _FakeConsumer:
     def __init__(self, messages: list[_FakeMessage]) -> None:

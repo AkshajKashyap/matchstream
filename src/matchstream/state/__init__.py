@@ -2,6 +2,7 @@
 
 from .models import MatchState, StateValidationError
 from .projector import MatchProjector, ProjectionUpdate
+from .rebuild import rebuild_state
 from .transition import (
     ClockRegressionError,
     DuplicateEventError,
@@ -29,5 +30,6 @@ __all__ = [
     "StateValidationError",
     "apply_event",
     "is_goal",
+    "rebuild_state",
 ]
 from .durable import DurableMatchProjector

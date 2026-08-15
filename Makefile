@@ -1,18 +1,20 @@
+PYTHON ?= $(shell if command -v python >/dev/null; then echo python; elif test -x .venv/bin/python; then echo .venv/bin/python; else echo python3; fi)
+
 .PHONY: install test lint check integration db-init
 
 install:
-	python -m pip install -e ".[dev]"
+	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
-	pytest -q
+	$(PYTHON) -m pytest -q
 
 lint:
-	ruff check .
+	$(PYTHON) -m ruff check .
 
 check: lint test
 
 integration:
-	pytest -q -o addopts='' -m integration
+	$(PYTHON) -m pytest -q -o addopts='' -m integration
 
 db-init:
-	python -m matchstream.streaming.cli init-db
+	$(PYTHON) -m matchstream.streaming.cli init-db

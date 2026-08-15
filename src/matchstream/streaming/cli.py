@@ -12,9 +12,11 @@ from matchstream.state import DurableMatchProjector, MatchProjector, MatchState
 from matchstream.storage import DatabaseConfig, PostgresProjectionRepository, state_to_dict
 
 from .deduplication import EventDeduplicator
-from .processing import project_next
+from .dlq_transport import RedpandaDeadLetterConsumer, RedpandaDeadLetterProducer
+from .processing import QuarantinedEvent, project_next, project_next_with_dlq
 from .redpanda import BrokerConfig, RedpandaEventConsumer, RedpandaEventProducer
 from .replay import publish_replay
+from .retry import RetryPolicy
 
 
 def main() -> None:
@@ -26,11 +28,35 @@ def main() -> None:
     durable_parser = subcommands.add_parser("durable-project", help="project events into PostgreSQL")
     _add_consume_arguments(durable_parser)
     _add_database_argument(durable_parser)
+    resilient_parser = subcommands.add_parser("resilient-project", help="durably project with dead-letter handling")
+    _add_consume_arguments(resilient_parser)
+    _add_database_argument(resilient_parser)
+    _add_dead_letter_arguments(resilient_parser)
     initialize_parser = subcommands.add_parser("init-db", help="initialize the PostgreSQL schema")
     _add_database_argument(initialize_parser)
     state_parser = subcommands.add_parser("state", help="print a durable match-state snapshot")
     state_parser.add_argument("--match-id", required=True)
     _add_database_argument(state_parser)
+    status_parser = subcommands.add_parser("status", help="print concise durable projection status")
+    status_parser.add_argument("--match-id", required=True)
+    _add_database_argument(status_parser)
+    rebuild_parser = subcommands.add_parser("rebuild", help="offline rebuild from durable canonical history")
+    rebuild_parser.add_argument("--match-id", required=True)
+    _add_database_argument(rebuild_parser)
+    for command in ("dlq-list", "dlq-show", "dlq-replay"):
+        dlq_parser = subcommands.add_parser(command, help=f"{command} operational command")
+        _add_common_broker_arguments(dlq_parser)
+        _add_dead_letter_arguments(dlq_parser)
+        dlq_parser.add_argument(
+            "--group-id",
+            default=f"{BrokerConfig.from_environment().group_id}-dlq-operator",
+            help="consumer group used to inspect the DLQ; use a fresh group to rescan retained records",
+        )
+        dlq_parser.add_argument("--max-events", type=int, default=100)
+        if command in {"dlq-show", "dlq-replay"}:
+            dlq_parser.add_argument("--record-id", required=True)
+        if command == "dlq-replay":
+            dlq_parser.add_argument("--target-topic", required=True)
     arguments = parser.parse_args()
 
     if arguments.command == "init-db":
@@ -39,6 +65,13 @@ def main() -> None:
         return
     if arguments.command == "state":
         _print_durable_state(arguments)
+        return
+    if arguments.command == "status":
+        print(json.dumps(_repository(arguments).projection_status(arguments.match_id), default=str))
+        return
+    if arguments.command == "rebuild":
+        state = _repository(arguments).rebuild_match(arguments.match_id)
+        print(json.dumps(state_to_dict(state), sort_keys=True))
         return
 
     broker_config = BrokerConfig(
@@ -52,8 +85,12 @@ def main() -> None:
         _consume(arguments, broker_config)
     elif arguments.command == "project":
         _project(arguments, broker_config)
-    else:
+    elif arguments.command == "durable-project":
         _durable_project(arguments, broker_config)
+    elif arguments.command == "resilient-project":
+        _resilient_project(arguments, broker_config)
+    else:
+        _dead_letter_command(arguments, broker_config)
 
 
 def _add_common_broker_arguments(parser: argparse.ArgumentParser) -> None:
@@ -79,6 +116,12 @@ def _add_consume_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _add_database_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--database-url", default=DatabaseConfig.from_environment().dsn)
+
+
+def _add_dead_letter_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--dlq-topic", default=f"{BrokerConfig.from_environment().topic}.dlq")
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--retry-delay", type=float, default=0.0)
 
 
 def _produce(arguments: argparse.Namespace, config: BrokerConfig) -> None:
@@ -143,6 +186,69 @@ def _durable_project(arguments: argparse.Namespace, config: BrokerConfig) -> Non
                     f"| events {processed.update.state.total_processed_events}"
                 )
             consumed += 1
+
+
+def _resilient_project(arguments: argparse.Namespace, config: BrokerConfig) -> None:
+    projector = DurableMatchProjector(_repository(arguments))
+    dlq_config = BrokerConfig(
+        bootstrap_servers=config.bootstrap_servers,
+        topic=arguments.dlq_topic,
+        group_id=config.group_id,
+    )
+    policy = RetryPolicy(max_attempts=arguments.max_attempts, base_delay_seconds=arguments.retry_delay)
+    consumed = 0
+    with RedpandaEventConsumer(config) as consumer, RedpandaDeadLetterProducer(dlq_config) as publisher:
+        while arguments.max_events == 0 or consumed < arguments.max_events:
+            result = project_next_with_dlq(
+                consumer, projector, publisher, policy, arguments.poll_timeout
+            )
+            if result is None:
+                continue
+            if isinstance(result, QuarantinedEvent):
+                print(f"quarantined {result.event.event_id} as {result.dead_letter.record_id}")
+            elif result.update.applied:
+                _print_projection_update(result.update.state, result.event.event_type)
+            else:
+                print(f"{result.event.match_id} | durable duplicate ignored id={result.event.event_id}")
+            consumed += 1
+
+
+def _dead_letter_command(arguments: argparse.Namespace, config: BrokerConfig) -> None:
+    dlq_config = BrokerConfig(
+        bootstrap_servers=config.bootstrap_servers,
+        topic=arguments.dlq_topic,
+        group_id=config.group_id,
+    )
+    with RedpandaDeadLetterConsumer(dlq_config) as consumer:
+        for _ in range(arguments.max_events):
+            record = consumer.poll(1.0)
+            if record is None:
+                continue
+            if arguments.command == "dlq-list":
+                consumer.commit()
+                print(
+                    f"{record.record_id} match={record.original_event.match_id} "
+                    f"source={record.source.topic}:{record.source.partition}:{record.source.offset} "
+                    f"error={record.error_type}"
+                )
+            elif record.record_id == arguments.record_id:
+                if arguments.command == "dlq-show":
+                    print(json.dumps({"record_id": record.record_id, "event_id": record.original_event.event_id,
+                                      "match_id": record.original_event.match_id, "error": record.error_message,
+                                      "attempts": record.attempt_count}, sort_keys=True))
+                else:
+                    with RedpandaEventProducer(
+                        BrokerConfig(
+                            bootstrap_servers=config.bootstrap_servers,
+                            topic=arguments.target_topic,
+                            group_id=config.group_id,
+                        )
+                    ) as producer:
+                        producer.publish(record.original_event)
+                    print(f"replayed {record.original_event.event_id} to {arguments.target_topic}")
+                return
+    if arguments.command != "dlq-list":
+        raise RuntimeError(f"dead-letter record {arguments.record_id!r} was not found")
 
 
 def _repository(arguments: argparse.Namespace) -> PostgresProjectionRepository:

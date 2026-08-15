@@ -35,3 +35,10 @@ share a partition; this gives no ordering guarantee across different matches.
 Projection state is process-local and is derived through pure state transitions.
 Milestone 4 also supports a durable projector: state and processed identity are
 committed atomically in PostgreSQL before an offset acknowledgement.
+
+## Current Milestone 5 recovery boundary
+
+projection failure -> bounded retry -> poison classification -> DLQ publish
+-> source offset commit
+
+durable canonical history -> offline rebuild -> replacement MatchState snapshot

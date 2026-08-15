@@ -8,7 +8,6 @@ from .contract import (
 )
 from .deduplication import EventDeduplicator
 from .interfaces import AcknowledgingEventConsumer, EventConsumer, EventPublisher
-from .processing import ProcessedEvent, project_next
 from .redpanda import (
     BrokerConfig,
     BrokerConfigurationError,
@@ -40,3 +39,23 @@ __all__ = [
     "publish_replay",
     "serialize_event",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Lazily import processing helpers to avoid a state/transport import cycle."""
+
+    if name in {"ProcessedEvent", "QuarantinedEvent", "project_next", "project_next_with_dlq"}:
+        from .processing import (
+            ProcessedEvent,
+            QuarantinedEvent,
+            project_next,
+            project_next_with_dlq,
+        )
+
+        return {
+            "ProcessedEvent": ProcessedEvent,
+            "QuarantinedEvent": QuarantinedEvent,
+            "project_next": project_next,
+            "project_next_with_dlq": project_next_with_dlq,
+        }[name]
+    raise AttributeError(name)

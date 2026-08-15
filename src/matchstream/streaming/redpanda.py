@@ -10,6 +10,7 @@ from typing import Any, Self
 from matchstream.models import CanonicalEvent
 
 from .contract import EventContractError, deserialize_event, serialize_event
+from .dlq import SourcePosition
 
 
 class BrokerConfigurationError(ValueError):
@@ -132,6 +133,7 @@ class RedpandaEventConsumer:
         self._client.subscribe([config.topic])
         self._closed = False
         self._last_message: Any | None = None
+        self._last_source_position: SourcePosition | None = None
 
     def poll(self, timeout_seconds: float) -> CanonicalEvent | None:
         if self._closed:
@@ -151,7 +153,18 @@ class RedpandaEventConsumer:
         except EventContractError as error:
             raise BrokerMessageError(f"invalid event message from broker: {error}") from error
         self._last_message = message
+        self._last_source_position = SourcePosition(
+            topic=message.topic(),
+            partition=message.partition(),
+            offset=message.offset(),
+        )
         return event
+
+    @property
+    def last_source_position(self) -> SourcePosition | None:
+        """Return the source location of the most recently returned event."""
+
+        return self._last_source_position
 
     def commit(self) -> None:
         """Synchronously commit the most recently returned valid message."""

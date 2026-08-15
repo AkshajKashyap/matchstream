@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,8 @@ from psycopg.types.json import Jsonb
 
 from matchstream.models import CanonicalEvent
 from matchstream.state.models import MatchState
+from matchstream.state.rebuild import rebuild_state
+from matchstream.streaming.contract import deserialize_event, serialize_event
 
 from .repository import DurableProjectionResult, Transition
 from .serialization import StateSerializationError, state_from_dict, state_to_dict
@@ -91,11 +94,11 @@ class PostgresProjectionRepository:
                 cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (event.match_id,))
                 cursor.execute(
                     """
-                            INSERT INTO processed_events (event_id, match_id, sequence)
-                            VALUES (%s, %s, %s)
-                            ON CONFLICT (event_id) DO NOTHING
-                            RETURNING event_id
-                            """,
+                    INSERT INTO processed_events (event_id, match_id, sequence)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (event_id) DO NOTHING
+                    RETURNING event_id
+                    """,
                     (event.event_id, event.match_id, event.sequence),
                 )
                 inserted = cursor.fetchone() is not None
@@ -120,14 +123,14 @@ class PostgresProjectionRepository:
                 next_state = transition(previous, event)
                 cursor.execute(
                     """
-                            INSERT INTO match_states (match_id, state, latest_sequence, last_event_id)
-                            VALUES (%s, %s, %s, %s)
-                            ON CONFLICT (match_id) DO UPDATE SET
-                                state = EXCLUDED.state,
-                                latest_sequence = EXCLUDED.latest_sequence,
-                                last_event_id = EXCLUDED.last_event_id,
-                                updated_at = CURRENT_TIMESTAMP
-                            """,
+                    INSERT INTO match_states (match_id, state, latest_sequence, last_event_id)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (match_id) DO UPDATE SET
+                        state = EXCLUDED.state,
+                        latest_sequence = EXCLUDED.latest_sequence,
+                        last_event_id = EXCLUDED.last_event_id,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
                     (
                         next_state.match_id,
                         Jsonb(state_to_dict(next_state)),
@@ -135,11 +138,81 @@ class PostgresProjectionRepository:
                         next_state.last_event_id,
                     ),
                 )
+                cursor.execute(
+                    """
+                    INSERT INTO projection_events (event_id, match_id, sequence, event)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        event.event_id,
+                        event.match_id,
+                        event.sequence,
+                        Jsonb(json.loads(serialize_event(event))),
+                    ),
+                )
                 return DurableProjectionResult(state=next_state, applied=True)
         except (psycopg.Error, StateSerializationError) as error:
             raise DurableStorageError(
                 f"could not durably process event {event.event_id!r}: {error}"
             ) from error
+
+    def rebuild_match(self, match_id: str) -> MatchState:
+        """Offline rebuild from durable canonical history without clearing event identities."""
+
+        try:
+            with (
+                psycopg.connect(self._config.dsn) as connection,
+                connection.transaction(),
+                connection.cursor() as cursor,
+            ):
+                cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (match_id,))
+                cursor.execute(
+                    "SELECT event FROM projection_events WHERE match_id = %s ORDER BY sequence",
+                    (match_id,),
+                )
+                events = [deserialize_event(json.dumps(row[0])) for row in cursor.fetchall()]
+                if not events:
+                    raise DurableStorageError(f"cannot rebuild {match_id!r}: no durable event history")
+                state = rebuild_state(match_id, events)
+                cursor.execute(
+                    """
+                    UPDATE match_states
+                    SET state = %s, latest_sequence = %s, last_event_id = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE match_id = %s
+                    """,
+                    (Jsonb(state_to_dict(state)), state.latest_sequence, state.last_event_id, match_id),
+                )
+                if cursor.rowcount != 1:
+                    raise DurableStorageError(f"cannot rebuild {match_id!r}: no durable state row")
+                return state
+        except (psycopg.Error, ValueError, StateSerializationError) as error:
+            raise DurableStorageError(f"could not rebuild match {match_id!r}: {error}") from error
+
+    def projection_status(self, match_id: str) -> dict[str, object] | None:
+        """Return concise operator-visible durable projection status."""
+
+        try:
+            with psycopg.connect(self._config.dsn) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT match_id, latest_sequence, last_event_id, updated_at,
+                           (state ->> 'total_processed_events')::INTEGER
+                    FROM match_states WHERE match_id = %s
+                    """,
+                    (match_id,),
+                )
+                row = cursor.fetchone()
+        except psycopg.Error as error:
+            raise DurableStorageError(f"could not load status for {match_id!r}: {error}") from error
+        if row is None:
+            return None
+        return {
+            "match_id": row[0],
+            "latest_sequence": row[1],
+            "last_event_id": row[2],
+            "updated_at": row[3].isoformat(),
+            "total_processed_events": row[4],
+        }
 
 
 def _ensure_duplicate_matches_event(cursor: Any, event: CanonicalEvent) -> None:
@@ -178,4 +251,14 @@ _SCHEMA_STATEMENTS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS processed_events_match_id_idx ON processed_events (match_id)",
+    """
+    CREATE TABLE IF NOT EXISTS projection_events (
+        event_id TEXT PRIMARY KEY REFERENCES processed_events (event_id),
+        match_id TEXT NOT NULL,
+        sequence BIGINT NOT NULL,
+        event JSONB NOT NULL,
+        UNIQUE (match_id, sequence)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS projection_events_match_sequence_idx ON projection_events (match_id, sequence)",
 )
