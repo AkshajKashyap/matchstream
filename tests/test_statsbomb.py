@@ -89,3 +89,10 @@ def test_malformed_statsbomb_input_has_useful_errors(raw_events: object, message
 def test_missing_input_file_has_useful_error(tmp_path: Path) -> None:
     with pytest.raises(StatsBombIngestionError, match="does not exist"):
         load_statsbomb_events(tmp_path / "not-there.json", "demo")
+
+
+def test_non_contiguous_source_indexes_are_rejected_for_strict_projection_ordering() -> None:
+    raw_events = json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+    with pytest.raises(StatsBombIngestionError, match="indexes must be contiguous"):
+        convert_statsbomb_events([raw_events[1], raw_events[0]], "demo")

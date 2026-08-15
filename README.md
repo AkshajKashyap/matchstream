@@ -34,4 +34,6 @@ See [the Milestone 1 guide](docs/milestone-1.md) for the event schema, usage,
 and assumptions. [The Milestone 2 guide](docs/milestone-2.md) describes the
 versioned JSON contract and optional local Redpanda transport. [The Milestone 3
 guide](docs/milestone-3.md) documents deterministic in-memory match-state
-projection and the consumer acknowledgement boundary.
+projection and the consumer acknowledgement boundary. [The Milestone 4 guide]
+(docs/milestone-4.md) adds durable PostgreSQL snapshots and idempotent recovery
+from Kafka redelivery.

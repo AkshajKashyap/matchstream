@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 
 dependencies = [
     "confluent-kafka>=2.12,<3",
+    "psycopg[binary]>=3.2,<4",
 ]
 
 [project.optional-dependencies]
@@ -26,9 +27,7 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-m 'not integration'"
-markers = [
-    "integration: requires a running local Redpanda broker",
-]
+markers = ["integration: requires local Redpanda and/or PostgreSQL services"]
 
 [tool.ruff]
 line-length = 100

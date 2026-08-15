@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from math import isfinite
 from pathlib import Path
 from typing import Any
@@ -57,10 +58,17 @@ def convert_statsbomb_events(raw_events: object, match_id: str | int) -> list[Ca
                 f"invalid StatsBomb event at array position {source_position}: {error}"
             ) from error
 
-    return [
+    ordered_events = [
         event
         for _, event in sorted(converted, key=lambda item: (*event_order_key(item[1]), item[0]))
     ]
+    for previous, event in pairwise(ordered_events):
+        if event.sequence != previous.sequence + 1:
+            raise StatsBombIngestionError(
+                "StatsBomb event indexes must be contiguous after ordering; "
+                f"expected {previous.sequence + 1}, received {event.sequence}"
+            )
+    return ordered_events
 
 
 def convert_statsbomb_event(raw_event: object, match_id: str | int) -> CanonicalEvent:

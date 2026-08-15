@@ -17,6 +17,7 @@ from .transition import (
 __all__ = [
     "ClockRegressionError",
     "DuplicateEventError",
+    "DurableMatchProjector",
     "MatchMismatchError",
     "MatchProjector",
     "MatchState",
@@ -29,3 +30,4 @@ __all__ = [
     "apply_event",
     "is_goal",
 ]
+from .durable import DurableMatchProjector
