@@ -14,10 +14,20 @@ class EventDeduplicator:
     def accept(self, event: CanonicalEvent) -> bool:
         """Record an event identity and return whether it was not seen before."""
 
-        if event.event_id in self._seen_event_ids:
+        if self.seen(event):
             return False
-        self._seen_event_ids.add(event.event_id)
+        self.record(event)
         return True
+
+    def seen(self, event: CanonicalEvent) -> bool:
+        """Return whether this event identity has already been recorded."""
+
+        return event.event_id in self._seen_event_ids
+
+    def record(self, event: CanonicalEvent) -> None:
+        """Record an event identity after its processing has succeeded."""
+
+        self._seen_event_ids.add(event.event_id)
 
     @property
     def size(self) -> int:

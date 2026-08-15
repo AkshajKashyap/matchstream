@@ -46,6 +46,22 @@ def test_optional_statsbomb_fields_are_safe_when_absent() -> None:
     assert event.metadata == {}
 
 
+def test_shot_goal_outcome_is_preserved_in_canonical_metadata() -> None:
+    raw_event = {
+        "id": "goal-event",
+        "index": 5,
+        "period": 1,
+        "timestamp": "00:01:30.000",
+        "type": {"id": 16, "name": "Shot"},
+        "team": {"id": 10, "name": "Home FC"},
+        "shot": {"outcome": {"id": 97, "name": "Goal"}},
+    }
+
+    event = convert_statsbomb_event(raw_event, "demo")
+
+    assert event.metadata["outcome"] == {"id": "97", "name": "Goal"}
+
+
 @pytest.mark.parametrize(
     ("raw_events", "message"),
     [

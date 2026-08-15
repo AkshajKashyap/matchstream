@@ -7,8 +7,10 @@ from pathlib import Path
 
 from matchstream.ingestion import load_statsbomb_events
 from matchstream.replay import MatchReplayer, ReplayConfig
+from matchstream.state import MatchProjector, MatchState
 
 from .deduplication import EventDeduplicator
+from .processing import project_next
 from .redpanda import BrokerConfig, RedpandaEventConsumer, RedpandaEventProducer
 from .replay import publish_replay
 
@@ -18,6 +20,7 @@ def main() -> None:
     subcommands = parser.add_subparsers(dest="command", required=True)
     _add_produce_arguments(subcommands.add_parser("produce", help="replay a StatsBomb file to Redpanda"))
     _add_consume_arguments(subcommands.add_parser("consume", help="print validated Redpanda events"))
+    _add_consume_arguments(subcommands.add_parser("project", help="project validated events into match state"))
     arguments = parser.parse_args()
 
     config = BrokerConfig(
@@ -27,8 +30,10 @@ def main() -> None:
     )
     if arguments.command == "produce":
         _produce(arguments, config)
-    else:
+    elif arguments.command == "consume":
         _consume(arguments, config)
+    else:
+        _project(arguments, config)
 
 
 def _add_common_broker_arguments(parser: argparse.ArgumentParser) -> None:
@@ -78,6 +83,30 @@ def _consume(arguments: argparse.Namespace, config: BrokerConfig) -> None:
                 print(f"duplicate ignored id={event.event_id}")
             consumer.commit()
             consumed += 1
+
+
+def _project(arguments: argparse.Namespace, config: BrokerConfig) -> None:
+    projector = MatchProjector()
+    consumed = 0
+    with RedpandaEventConsumer(config) as consumer:
+        while arguments.max_events == 0 or consumed < arguments.max_events:
+            processed = project_next(consumer, projector, arguments.poll_timeout)
+            if processed is None:
+                continue
+            state = processed.update.state
+            print(
+                f"{state.match_id} | {state.current_period}:{state.current_match_clock_seconds:06.3f} "
+                f"| {processed.event.event_type} | score {_score_summary(state)} "
+                f"| events {state.total_processed_events}"
+            )
+            consumed += 1
+
+
+def _score_summary(state: MatchState) -> str:
+    # Keep unknown sides explicit rather than inventing a home/away scoreline.
+    home = str(state.score_for(state.home_team)) if state.home_team is not None else "?"
+    away = str(state.score_for(state.away_team)) if state.away_team is not None else "?"
+    return f"{home}-{away}"
 
 
 if __name__ == "__main__":

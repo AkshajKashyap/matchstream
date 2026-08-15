@@ -14,7 +14,7 @@ services:
     volumes:
       - redpanda-data:/var/lib/redpanda/data
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health --brokers=localhost:9092"]
+      test: ["CMD-SHELL", "rpk cluster health"]
       interval: 5s
       timeout: 5s
       retries: 12

@@ -7,7 +7,8 @@ from .contract import (
     serialize_event,
 )
 from .deduplication import EventDeduplicator
-from .interfaces import EventConsumer, EventPublisher
+from .interfaces import AcknowledgingEventConsumer, EventConsumer, EventPublisher
+from .processing import ProcessedEvent, project_next
 from .redpanda import (
     BrokerConfig,
     BrokerConfigurationError,
@@ -20,6 +21,7 @@ from .redpanda import (
 from .replay import publish_replay
 
 __all__ = [
+    "AcknowledgingEventConsumer",
     "BrokerConfig",
     "BrokerConfigurationError",
     "BrokerMessageError",
@@ -28,11 +30,13 @@ __all__ = [
     "EventContractError",
     "EventDeduplicator",
     "EventPublisher",
+    "ProcessedEvent",
     "RedpandaEventConsumer",
     "RedpandaEventProducer",
     "UnsupportedSchemaVersion",
     "deserialize_event",
     "match_partition_key",
+    "project_next",
     "publish_replay",
     "serialize_event",
 ]

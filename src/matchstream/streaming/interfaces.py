@@ -25,3 +25,10 @@ class EventConsumer(Protocol):
 
     def close(self) -> None:
         """Release transport resources."""
+
+
+class AcknowledgingEventConsumer(EventConsumer, Protocol):
+    """An event consumer whose latest successfully handled message can be committed."""
+
+    def commit(self) -> None:
+        """Acknowledge the most recently returned valid event."""

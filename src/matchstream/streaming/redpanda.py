@@ -143,7 +143,7 @@ class RedpandaEventConsumer:
         if message is None:
             return None
         if message.error() is not None:
-            if _is_partition_eof(message.error()):
+            if _is_retriable_poll_error(message.error()):
                 return None
             raise BrokerTransportError(f"broker returned a message error: {message.error()}")
         try:
@@ -216,9 +216,12 @@ def _kafka_module() -> Any:
     return confluent_kafka
 
 
-def _is_partition_eof(error: object) -> bool:
+def _is_retriable_poll_error(error: object) -> bool:
     try:
         from confluent_kafka import KafkaError
     except ImportError:
         return False
-    return getattr(error, "code", lambda: None)() == KafkaError._PARTITION_EOF
+    return getattr(error, "code", lambda: None)() in {
+        KafkaError._PARTITION_EOF,
+        KafkaError.UNKNOWN_TOPIC_OR_PART,
+    }

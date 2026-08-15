@@ -32,4 +32,6 @@ Milestone 1 establishes the provider boundary and a deterministic replay loop;
 it deliberately does not add an event broker, database, API, or analytics.
 See [the Milestone 1 guide](docs/milestone-1.md) for the event schema, usage,
 and assumptions. [The Milestone 2 guide](docs/milestone-2.md) describes the
-versioned JSON contract and optional local Redpanda transport.
+versioned JSON contract and optional local Redpanda transport. [The Milestone 3
+guide](docs/milestone-3.md) documents deterministic in-memory match-state
+projection and the consumer acknowledgement boundary.
