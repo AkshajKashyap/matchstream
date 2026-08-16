@@ -1,0 +1,52 @@
+{
+  "environment": {
+    "captured_at_utc": "2026-08-16T23:06:32.737397+00:00",
+    "cpu": "# The following is the parsable format, which can be fed to other | # programs. Each different item in every column has an unique ID | # starting usually from zero. | # Modelname | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(R) Core(TM) i7-1355U | 13th Gen Intel(",
+    "docker": "Docker version 29.7.2, build a7dcaa6",
+    "memory": "total        used        free      shared  buff/cache   available | Mem:            15Gi       3.9Gi       9.5Gi        67Mi       2.3Gi        11Gi | Swap:          4.0Gi          0B       4.0Gi",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "python": "3.13.11"
+  },
+  "kind": "websocket_fanout",
+  "label": "local development benchmark",
+  "method": "direct durable commit timestamp to receipt of its WebSocket state_update",
+  "rows": [
+    {
+      "clients_requested": 1,
+      "durable_commit_to_receipt_latency": {
+        "p50_ms": 29.108,
+        "p95_ms": 29.108,
+        "p99_ms": null,
+        "sample_count": 1
+      },
+      "errors": 0,
+      "state_updates_delivered": 1,
+      "successful_connections": 1
+    },
+    {
+      "clients_requested": 4,
+      "durable_commit_to_receipt_latency": {
+        "p50_ms": 28.05,
+        "p95_ms": 28.057,
+        "p99_ms": null,
+        "sample_count": 4
+      },
+      "errors": 0,
+      "state_updates_delivered": 4,
+      "successful_connections": 4
+    },
+    {
+      "clients_requested": 8,
+      "durable_commit_to_receipt_latency": {
+        "p50_ms": 24.086,
+        "p95_ms": 24.175,
+        "p99_ms": null,
+        "sample_count": 8
+      },
+      "errors": 0,
+      "state_updates_delivered": 8,
+      "successful_connections": 8
+    }
+  ],
+  "scope": "measures PostgreSQL notify -> API listener -> WebSocket delivery, not broker-to-database latency"
+}

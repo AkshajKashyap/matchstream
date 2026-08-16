@@ -1,6 +1,6 @@
 PYTHON ?= $(shell if command -v python >/dev/null; then echo python; elif test -x .venv/bin/python; then echo .venv/bin/python; else echo python3; fi)
 
-.PHONY: install test lint check integration db-init observability-up observability-serve api websocket-demo frontend-install frontend-dev frontend-test frontend-build
+.PHONY: install test lint check integration db-init observability-up observability-serve api websocket-demo frontend-install frontend-dev frontend-test frontend-build release-check real-demo-download
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -42,3 +42,8 @@ frontend-test:
 
 frontend-build:
 	npm --prefix frontend run build
+
+release-check: check frontend-test frontend-build
+
+real-demo-download:
+	$(PYTHON) scripts/fetch_real_demo.py

@@ -1,88 +1,60 @@
-# MatchStream Architecture
+# MatchStream architecture
 
-## Initial Target
-
-Historical football event data is replayed as a live event stream.
-
-Planned flow:
-
-1. Dataset ingestion
-2. Match replay producer
-3. Event broker
-4. Stateful consumers
-5. Analytics and prediction
-6. Redis/PostgreSQL persistence
-7. FastAPI/WebSocket serving
-8. Live dashboard
-9. Observability
-10. Load and failure testing
-
-## Current Milestone 4 boundary
+## Implemented event path
 
 ```text
-StatsBomb adapter -> CanonicalEvent -> deterministic replay -> versioned JSON
-                                                        -> Kafka/Redpanda adapter
-                                                        -> validated CanonicalEvent
-                                                        -> PostgreSQL transaction
-                                                           -> event identity
-                                                           -> MatchState snapshot
-                                                        -> commit offset on success
+StatsBomb JSON -> ingestion adapter -> CanonicalEvent -> deterministic replay
+                                                       -> versioned Kafka record
+                                                       -> Redpanda partition(match_id)
+                                                       -> durable projector
+                                                          -> PostgreSQL transaction
+                                                             processed event identity
+                                                             canonical event history
+                                                             MatchState snapshot
+                                                             pg_notify(match_id)
+                                                       -> commit Kafka offset
+
+PostgreSQL -> LISTEN/NOTIFY -> FastAPI -> HTTP snapshot/history
+                                      -> best-effort match-scoped WebSocket -> React dashboard
 ```
 
-StatsBomb parsing and replay remain independent of the wire contract and broker
-adapter. Events for the same match use `match_id` as their broker key so they
-share a partition; this gives no ordering guarantee across different matches.
-Projection state is process-local and is derived through pure state transitions.
-Milestone 4 also supports a durable projector: state and processed identity are
-committed atomically in PostgreSQL before an offset acknowledgement.
+The StatsBomb adapter is the only component that knows provider JSON. Canonical
+events and wire records are independently versioned boundaries. `match_id` is
+the Kafka key, so events for one match share a partition and retain partition
+order; different matches have no cross-match order guarantee.
 
-## Current Milestone 5 recovery boundary
-
-projection failure -> bounded retry -> poison classification -> DLQ publish
--> source offset commit
-
-durable canonical history -> offline rebuild -> replacement MatchState snapshot
-
-## Current Milestone 6 operational boundary
+## Durability and failure path
 
 ```text
-consumer -> structured event log -> processing/retry/DLQ metrics -> /metrics
-       \-> PostgreSQL and Redpanda readiness checks -------------> /health/ready
-       \-> committed offsets + broker watermarks ----------------> lag CLI
+validated event -> transaction succeeds -> offset commit
+                -> deterministic transition fails -> bounded retry
+                                                   -> confirmed DLQ publish -> offset commit
+                -> database/broker/DLQ failure -> no offset commit -> redelivery
 ```
 
-Instrumentation surrounds adapter boundaries only. The pure match-state
-transition remains independent of logging, Prometheus, PostgreSQL, and Kafka.
+The PostgreSQL transaction inserts event identity, appends canonical history,
+updates the projection snapshot, and emits `pg_notify`. A duplicate identity is
+a successful no-op. There is no distributed Kafka/PostgreSQL transaction, so a
+crash after database commit and before offset commit causes redelivery; durable
+identity prevents duplicate state application.
 
-## Current Milestone 7 application boundary
+## Read and live-delivery model
 
-```text
-Kafka consumer -> PostgreSQL durable projection --COMMIT--> pg_notify(match_id)
-                                                         -> API LISTEN wake-up
-                                                         -> read committed snapshot
-                                                         -> match-scoped WebSocket clients
+PostgreSQL is authoritative. FastAPI has no Kafka-consumer ownership and never
+derives football state. HTTP returns committed snapshots/history. Notifications
+make the API reread committed state before broadcasting a `state_update`.
+WebSockets are low-latency, best-effort delivery: clients receive a snapshot on
+connect/reconnect and use `latest_sequence` plus HTTP history to recover from
+stale or gapped updates.
 
-HTTP API -------------------------------------------------> read committed snapshot/history
-```
+## Observability and operations
 
-The API owns presentation and best-effort live delivery, never football-state
-correctness or Kafka consumer ownership. PostgreSQL remains authoritative; a
-notification only causes the API to reread durable state before broadcasting.
+Structured JSON logs correlate event identity without exposing payloads or
+credentials. Prometheus metrics surround processing, PostgreSQL transactions,
+offset commits, retry/DLQ behavior, API requests, and WebSocket delivery.
+Readiness checks PostgreSQL and Redpanda; the lag command reads actual broker
+watermarks and committed offsets. Canonical history supports explicit,
+maintenance-mode deterministic rebuilds.
 
-## Current Milestone 8 dashboard boundary
-
-```text
-                     HTTP: match list, durable snapshot, event history
-PostgreSQL <- FastAPI ------------------------------------------------> React/Vite dashboard
-     ^               |                                                       |
-     |               | WebSocket: snapshot, best-effort state_update         | renders score,
-consumer commit      +-------------------------------------------------------+ timeline, status
-
-```
-
-The dashboard never connects to PostgreSQL, Kafka, or the replay producer.
-It first obtains authoritative data over HTTP, then treats the WebSocket as a
-notification channel. A snapshot replaces local match state after (re)connect;
-state-update sequence gaps trigger an HTTP reconciliation and event-history
-refresh. The timeline is bounded to recent events and does not claim analytics
-the API does not provide.
+See [system design](system-design.md) for decisions and trade-offs and
+[limitations](limitations.md) for the current operating boundary.

@@ -1,9 +1,11 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { MatchDashboard } from "./components/MatchDashboard";
+import { formatClock } from "./components/MatchList";
 import type { CanonicalEvent, MatchState } from "./types";
 
 const firstState: MatchState = {
@@ -53,6 +55,10 @@ afterEach(() => {
 });
 
 describe("dashboard", () => {
+  it("formats fractional provider clocks as readable elapsed whole seconds", () => {
+    expect(formatClock(3003.68)).toBe("50:03");
+  });
+
   it("lists matches and switches the durable match view", async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url.includes("/matches?")) return Promise.resolve(jsonResponse({ matches: [
@@ -85,6 +91,17 @@ describe("dashboard", () => {
     render(<App />);
     expect(await screen.findByText("durable state unavailable")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("does not treat Strict Mode's cancelled first request as an API outage", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(jsonResponse(
+      url.includes("/matches?") ? { matches: [{ ...firstState }], next_after_match_id: null }
+        : url.includes("/events?") ? { events: [], next_after_sequence: null } : firstState
+    ))));
+    render(<StrictMode><App /></StrictMode>);
+
+    expect(await screen.findByRole("button", { name: /home fc/i })).toBeInTheDocument();
+    expect(screen.queryByText("MatchStream API is unavailable. Check that the API service is running.")).toBeNull();
   });
 
   it("marks the view live only after a WebSocket snapshot and ignores stale updates", async () => {

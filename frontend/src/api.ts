@@ -16,7 +16,8 @@ async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl}${path}`, { signal });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new ApiError("MatchStream API is unavailable. Check that the API service is running.");
   }
   if (!response.ok) {
