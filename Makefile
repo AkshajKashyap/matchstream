@@ -1,6 +1,6 @@
 PYTHON ?= $(shell if command -v python >/dev/null; then echo python; elif test -x .venv/bin/python; then echo .venv/bin/python; else echo python3; fi)
 
-.PHONY: install test lint check integration db-init observability-up observability-serve
+.PHONY: install test lint check integration db-init observability-up observability-serve api websocket-demo
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -24,3 +24,9 @@ observability-up:
 
 observability-serve:
 	$(PYTHON) -m matchstream.streaming.cli serve-observability
+
+api:
+	$(PYTHON) -m matchstream.api.server
+
+websocket-demo:
+	$(PYTHON) -m matchstream.api.demo_client $(URL)

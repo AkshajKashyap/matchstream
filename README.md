@@ -39,4 +39,5 @@ projection and the consumer acknowledgement boundary. [The Milestone 4 guide]
 from Kafka redelivery. The Milestone 5 guide adds bounded poison-event
 quarantine, DLQ operations, and offline projection rebuilds. [The Milestone 6
 guide](docs/milestone-6.md) adds structured logs, Prometheus metrics, health
-checks, and consumer-lag diagnostics.
+checks, and consumer-lag diagnostics. [The Milestone 7 guide](docs/milestone-7.md)
+adds the durable-state REST API and best-effort WebSocket updates.

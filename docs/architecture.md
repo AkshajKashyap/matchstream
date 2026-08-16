@@ -53,3 +53,18 @@ consumer -> structured event log -> processing/retry/DLQ metrics -> /metrics
 
 Instrumentation surrounds adapter boundaries only. The pure match-state
 transition remains independent of logging, Prometheus, PostgreSQL, and Kafka.
+
+## Current Milestone 7 application boundary
+
+```text
+Kafka consumer -> PostgreSQL durable projection --COMMIT--> pg_notify(match_id)
+                                                         -> API LISTEN wake-up
+                                                         -> read committed snapshot
+                                                         -> match-scoped WebSocket clients
+
+HTTP API -------------------------------------------------> read committed snapshot/history
+```
+
+The API owns presentation and best-effort live delivery, never football-state
+correctness or Kafka consumer ownership. PostgreSQL remains authoritative; a
+notification only causes the API to reread durable state before broadcasting.

@@ -6,7 +6,7 @@ from .postgres import (
     DurableStorageError,
     PostgresProjectionRepository,
 )
-from .repository import DurableProjectionResult, ProjectionRepository, Transition
+from .repository import DurableProjectionResult, ProjectionRepository, StoredMatch, Transition
 from .serialization import (
     STATE_SCHEMA_VERSION,
     StateSerializationError,
@@ -23,6 +23,7 @@ __all__ = [
     "PostgresProjectionRepository",
     "ProjectionRepository",
     "StateSerializationError",
+    "StoredMatch",
     "Transition",
     "state_from_dict",
     "state_to_dict",

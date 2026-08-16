@@ -99,6 +99,35 @@ class MatchStreamMetrics:
             "Aggregate committed consumer lag from the latest explicit inspection.",
             registry=registry,
         )
+        self.http_requests = Counter(
+            "matchstream_http_requests",
+            "HTTP responses served by normalized API route and status class.",
+            ["method", "route", "status_class"],
+            registry=registry,
+        )
+        self.http_request_duration = Histogram(
+            "matchstream_http_request_duration_seconds",
+            "HTTP request duration by normalized API route and method.",
+            ["method", "route"],
+            registry=registry,
+        )
+        self.websocket_connections = Gauge(
+            "matchstream_websocket_connections",
+            "Currently connected MatchStream WebSocket clients.",
+            registry=registry,
+        )
+        self.websocket_messages = Counter(
+            "matchstream_websocket_messages",
+            "WebSocket messages sent by bounded protocol message type.",
+            ["message_type"],
+            registry=registry,
+        )
+        self.websocket_errors = Counter(
+            "matchstream_websocket_errors",
+            "WebSocket failures by bounded operation.",
+            ["operation"],
+            registry=registry,
+        )
 
     @contextmanager
     def timer(self, histogram: Histogram, **labels: str) -> Iterator[None]:

@@ -15,12 +15,13 @@ from matchstream.observability.logging import get_logger
 from matchstream.observability.metrics import MatchStreamMetrics, metrics
 from matchstream.state.models import MatchState
 from matchstream.state.rebuild import rebuild_state
-from matchstream.streaming.contract import deserialize_event, serialize_event
+from matchstream.streaming.contract import EventContractError, deserialize_event, serialize_event
 
-from .repository import DurableProjectionResult, Transition
+from .repository import DurableProjectionResult, StoredMatch, Transition
 from .serialization import StateSerializationError, state_from_dict, state_to_dict
 
 DEFAULT_DATABASE_DSN = "postgresql://matchstream:matchstream@localhost:5432/matchstream"
+STATE_UPDATE_CHANNEL = "matchstream_state_updates"
 logger = get_logger("postgres")
 
 
@@ -78,6 +79,67 @@ class PostgresProjectionRepository:
         if row is None:
             return None
         return _decode_state(row[0], match_id)
+
+    def get_match(self, match_id: str) -> StoredMatch | None:
+        """Load one durable state with the timestamp needed by API clients."""
+
+        try:
+            with psycopg.connect(self._config.dsn) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT state, updated_at FROM match_states WHERE match_id = %s", (match_id,)
+                )
+                row = cursor.fetchone()
+        except psycopg.Error as error:
+            raise DurableStorageError(f"could not load match {match_id!r}: {error}") from error
+        return None if row is None else StoredMatch(_decode_state(row[0], match_id), row[1])
+
+    def list_matches(self, limit: int, after_match_id: str | None = None) -> list[StoredMatch]:
+        """Return a bounded, deterministic page of durable state snapshots."""
+
+        _validate_page_limit(limit)
+        try:
+            with psycopg.connect(self._config.dsn) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT match_id, state, updated_at
+                    FROM match_states
+                    WHERE (%s::TEXT IS NULL OR match_id > %s)
+                    ORDER BY match_id
+                    LIMIT %s
+                    """,
+                    (after_match_id, after_match_id, limit),
+                )
+                rows = cursor.fetchall()
+        except psycopg.Error as error:
+            raise DurableStorageError(f"could not list durable matches: {error}") from error
+        return [StoredMatch(_decode_state(row[1], row[0]), row[2]) for row in rows]
+
+    def list_match_events(
+        self, match_id: str, after_sequence: int | None, limit: int
+    ) -> list[CanonicalEvent]:
+        """Return a bounded canonical event-history page in sequence order."""
+
+        _validate_page_limit(limit)
+        if after_sequence is not None and after_sequence < 0:
+            raise ValueError("after_sequence must be non-negative")
+        try:
+            with psycopg.connect(self._config.dsn) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT event FROM projection_events
+                    WHERE match_id = %s AND (%s::BIGINT IS NULL OR sequence > %s)
+                    ORDER BY sequence
+                    LIMIT %s
+                    """,
+                    (match_id, after_sequence, after_sequence, limit),
+                )
+                rows = cursor.fetchall()
+        except psycopg.Error as error:
+            raise DurableStorageError(f"could not load event history for {match_id!r}: {error}") from error
+        try:
+            return [deserialize_event(json.dumps(row[0])) for row in rows]
+        except (EventContractError, ValueError, StateSerializationError) as error:
+            raise DurableStorageError(f"stored event history for {match_id!r} is invalid: {error}") from error
 
     def process_event(
         self, event: CanonicalEvent, transition: Transition
@@ -156,6 +218,7 @@ class PostgresProjectionRepository:
                             Jsonb(json.loads(serialize_event(event))),
                         ),
                     )
+                    cursor.execute("SELECT pg_notify(%s, %s)", (STATE_UPDATE_CHANNEL, event.match_id))
                     return DurableProjectionResult(state=next_state, applied=True)
         except (psycopg.Error, StateSerializationError) as error:
             logger.error(
@@ -200,6 +263,7 @@ class PostgresProjectionRepository:
                 )
                 if cursor.rowcount != 1:
                     raise DurableStorageError(f"cannot rebuild {match_id!r}: no durable state row")
+                cursor.execute("SELECT pg_notify(%s, %s)", (STATE_UPDATE_CHANNEL, match_id))
                 return state
         except (psycopg.Error, ValueError, StateSerializationError) as error:
             raise DurableStorageError(f"could not rebuild match {match_id!r}: {error}") from error
@@ -246,6 +310,11 @@ def _decode_state(value: object, match_id: str) -> MatchState:
     if state.match_id != match_id:
         raise DurableStorageError(f"stored state match_id does not match row {match_id!r}")
     return state
+
+
+def _validate_page_limit(limit: int) -> None:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer from 1 to 100")
 
 
 _SCHEMA_STATEMENTS = (
