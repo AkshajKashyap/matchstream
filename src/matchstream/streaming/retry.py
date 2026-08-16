@@ -60,6 +60,7 @@ def attempt_processing(
     operation: Callable[[], object],
     policy: RetryPolicy,
     sleep: Callable[[float], None] = time.sleep,
+    on_retry: Callable[[Exception, FailureClassification, int, float], None] | None = None,
 ) -> object | ProcessingFailure:
     """Run a bounded operation; only poison failures return for quarantining."""
 
@@ -75,7 +76,8 @@ def attempt_processing(
                     f"retriable processing failed after {attempt} attempts: {error}"
                 ) from error
             delay = policy.delay_for_retry(attempt)
+            if on_retry is not None:
+                on_retry(error, classification, attempt, delay)
             if delay:
                 sleep(delay)
     raise AssertionError("retry loop ended without result")
-

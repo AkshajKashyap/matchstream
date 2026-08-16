@@ -42,3 +42,14 @@ projection failure -> bounded retry -> poison classification -> DLQ publish
 -> source offset commit
 
 durable canonical history -> offline rebuild -> replacement MatchState snapshot
+
+## Current Milestone 6 operational boundary
+
+```text
+consumer -> structured event log -> processing/retry/DLQ metrics -> /metrics
+       \-> PostgreSQL and Redpanda readiness checks -------------> /health/ready
+       \-> committed offsets + broker watermarks ----------------> lag CLI
+```
+
+Instrumentation surrounds adapter boundaries only. The pure match-state
+transition remains independent of logging, Prometheus, PostgreSQL, and Kafka.

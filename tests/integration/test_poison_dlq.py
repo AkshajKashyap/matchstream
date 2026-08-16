@@ -5,8 +5,10 @@ import time
 from uuid import uuid4
 
 import pytest
+from prometheus_client import CollectorRegistry, generate_latest
 
 from matchstream.models import CanonicalEvent, EntityReference
+from matchstream.observability.metrics import MatchStreamMetrics
 from matchstream.state import DurableMatchProjector
 from matchstream.storage import DatabaseConfig, PostgresProjectionRepository
 from matchstream.streaming.dlq_transport import (
@@ -53,6 +55,8 @@ def test_poison_event_quarantine_allows_later_partition_event_and_rebuild() -> N
     )
     repository = PostgresProjectionRepository(DatabaseConfig.from_environment())
     repository.initialize_schema()
+    registry = CollectorRegistry()
+    telemetry = MatchStreamMetrics(registry)
     events = [_event(match_id, 1), _event(match_id, 3), _event(match_id, 2)]
 
     with RedpandaEventProducer(main) as producer:
@@ -65,7 +69,7 @@ def test_poison_event_quarantine_allows_later_partition_event_and_rebuild() -> N
     with RedpandaEventConsumer(main) as consumer, RedpandaDeadLetterProducer(dlq) as publisher:
         while time.monotonic() < deadline and len(received) < len(events):
             result = project_next_with_dlq(
-                consumer, projector, publisher, RetryPolicy(max_attempts=1), 1.0
+                consumer, projector, publisher, RetryPolicy(max_attempts=2), 1.0, observer=telemetry
             )
             if result is not None:
                 received.append(result)
@@ -75,6 +79,9 @@ def test_poison_event_quarantine_allows_later_partition_event_and_rebuild() -> N
     assert any(isinstance(result, QuarantinedEvent) for result in received)
     assert state is not None and state.latest_sequence == 2
     assert state.total_processed_events == 2
+    exposition = generate_latest(registry).decode()
+    assert "matchstream_retries_total{component=\"projection\",failure_class=\"poison\"} 1.0" in exposition
+    assert "matchstream_dlq_published_total 1.0" in exposition
 
     deadline = time.monotonic() + 15
     with RedpandaDeadLetterConsumer(dlq) as consumer:

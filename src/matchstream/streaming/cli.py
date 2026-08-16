@@ -7,12 +7,20 @@ import json
 from pathlib import Path
 
 from matchstream.ingestion import load_statsbomb_events
+from matchstream.observability.health import (
+    PostgresHealthCheck,
+    ReadinessService,
+    RedpandaHealthCheck,
+)
+from matchstream.observability.logging import configure_logging
+from matchstream.observability.server import ObservabilityServer
 from matchstream.replay import MatchReplayer, ReplayConfig
 from matchstream.state import DurableMatchProjector, MatchProjector, MatchState
 from matchstream.storage import DatabaseConfig, PostgresProjectionRepository, state_to_dict
 
 from .deduplication import EventDeduplicator
 from .dlq_transport import RedpandaDeadLetterConsumer, RedpandaDeadLetterProducer
+from .lag import inspect_consumer_lag
 from .processing import QuarantinedEvent, project_next, project_next_with_dlq
 from .redpanda import BrokerConfig, RedpandaEventConsumer, RedpandaEventProducer
 from .replay import publish_replay
@@ -32,6 +40,7 @@ def main() -> None:
     _add_consume_arguments(resilient_parser)
     _add_database_argument(resilient_parser)
     _add_dead_letter_arguments(resilient_parser)
+    _add_observability_arguments(resilient_parser)
     initialize_parser = subcommands.add_parser("init-db", help="initialize the PostgreSQL schema")
     _add_database_argument(initialize_parser)
     state_parser = subcommands.add_parser("state", help="print a durable match-state snapshot")
@@ -43,6 +52,18 @@ def main() -> None:
     rebuild_parser = subcommands.add_parser("rebuild", help="offline rebuild from durable canonical history")
     rebuild_parser.add_argument("--match-id", required=True)
     _add_database_argument(rebuild_parser)
+    health_parser = subcommands.add_parser("health", help="check PostgreSQL and Redpanda readiness")
+    _add_common_broker_arguments(health_parser)
+    _add_database_argument(health_parser)
+    lag_parser = subcommands.add_parser("lag", help="inspect actual consumer-group partition lag")
+    _add_common_broker_arguments(lag_parser)
+    lag_parser.add_argument("--group-id", default=BrokerConfig.from_environment().group_id)
+    observability_parser = subcommands.add_parser(
+        "serve-observability", help="serve /health/live, /health/ready, and /metrics"
+    )
+    _add_common_broker_arguments(observability_parser)
+    _add_database_argument(observability_parser)
+    _add_observability_arguments(observability_parser, default_port=9464)
     for command in ("dlq-list", "dlq-show", "dlq-replay"):
         dlq_parser = subcommands.add_parser(command, help=f"{command} operational command")
         _add_common_broker_arguments(dlq_parser)
@@ -58,6 +79,7 @@ def main() -> None:
         if command == "dlq-replay":
             dlq_parser.add_argument("--target-topic", required=True)
     arguments = parser.parse_args()
+    configure_logging()
 
     if arguments.command == "init-db":
         _repository(arguments).initialize_schema()
@@ -72,6 +94,15 @@ def main() -> None:
     if arguments.command == "rebuild":
         state = _repository(arguments).rebuild_match(arguments.match_id)
         print(json.dumps(state_to_dict(state), sort_keys=True))
+        return
+    if arguments.command == "health":
+        _print_health(arguments)
+        return
+    if arguments.command == "lag":
+        _print_lag(arguments)
+        return
+    if arguments.command == "serve-observability":
+        _serve_observability(arguments)
         return
 
     broker_config = BrokerConfig(
@@ -122,6 +153,11 @@ def _add_dead_letter_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dlq-topic", default=f"{BrokerConfig.from_environment().topic}.dlq")
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--retry-delay", type=float, default=0.0)
+
+
+def _add_observability_arguments(parser: argparse.ArgumentParser, default_port: int | None = None) -> None:
+    parser.add_argument("--metrics-host", default="127.0.0.1")
+    parser.add_argument("--metrics-port", type=int, default=default_port)
 
 
 def _produce(arguments: argparse.Namespace, config: BrokerConfig) -> None:
@@ -197,20 +233,25 @@ def _resilient_project(arguments: argparse.Namespace, config: BrokerConfig) -> N
     )
     policy = RetryPolicy(max_attempts=arguments.max_attempts, base_delay_seconds=arguments.retry_delay)
     consumed = 0
-    with RedpandaEventConsumer(config) as consumer, RedpandaDeadLetterProducer(dlq_config) as publisher:
-        while arguments.max_events == 0 or consumed < arguments.max_events:
-            result = project_next_with_dlq(
-                consumer, projector, publisher, policy, arguments.poll_timeout
-            )
-            if result is None:
-                continue
-            if isinstance(result, QuarantinedEvent):
-                print(f"quarantined {result.event.event_id} as {result.dead_letter.record_id}")
-            elif result.update.applied:
-                _print_projection_update(result.update.state, result.event.event_type)
-            else:
-                print(f"{result.event.match_id} | durable duplicate ignored id={result.event.event_id}")
-            consumed += 1
+    server = _start_metrics_server(arguments, config)
+    try:
+        with RedpandaEventConsumer(config) as consumer, RedpandaDeadLetterProducer(dlq_config) as publisher:
+            while arguments.max_events == 0 or consumed < arguments.max_events:
+                result = project_next_with_dlq(
+                    consumer, projector, publisher, policy, arguments.poll_timeout
+                )
+                if result is None:
+                    continue
+                if isinstance(result, QuarantinedEvent):
+                    print(f"quarantined {result.event.event_id} as {result.dead_letter.record_id}")
+                elif result.update.applied:
+                    _print_projection_update(result.update.state, result.event.event_type)
+                else:
+                    print(f"{result.event.match_id} | durable duplicate ignored id={result.event.event_id}")
+                consumed += 1
+    finally:
+        if server is not None:
+            server.close()
 
 
 def _dead_letter_command(arguments: argparse.Namespace, config: BrokerConfig) -> None:
@@ -278,5 +319,99 @@ def _score_summary(state: MatchState) -> str:
     return f"{home}-{away}"
 
 
+def _readiness(arguments: argparse.Namespace) -> ReadinessService:
+    broker = BrokerConfig(
+        bootstrap_servers=arguments.bootstrap_servers,
+        topic=arguments.topic,
+        group_id=getattr(arguments, "group_id", BrokerConfig().group_id),
+    )
+    return ReadinessService(
+        PostgresHealthCheck(DatabaseConfig(arguments.database_url)), RedpandaHealthCheck(broker)
+    )
+
+
+def _print_health(arguments: argparse.Namespace) -> None:
+    ready, statuses = _readiness(arguments).ready()
+    print(
+        json.dumps(
+            {
+                "status": "ready" if ready else "not_ready",
+                "dependencies": [
+                    {"name": item.name, "healthy": item.healthy, "detail": item.detail}
+                    for item in statuses
+                ],
+            }
+        )
+    )
+
+
+def _print_lag(arguments: argparse.Namespace) -> None:
+    config = BrokerConfig(
+        bootstrap_servers=arguments.bootstrap_servers,
+        topic=arguments.topic,
+        group_id=arguments.group_id,
+    )
+    rows = inspect_consumer_lag(config)
+    print(
+        json.dumps(
+            {
+                "topic": config.topic,
+                "group_id": config.group_id,
+                "partitions": [
+                    {
+                        "partition": row.partition,
+                        "committed_offset": row.committed_offset,
+                        "current_position": row.current_position,
+                        "end_offset": row.end_offset,
+                        "lag": row.lag,
+                    }
+                    for row in rows
+                ],
+            }
+        )
+    )
+
+
+def _start_metrics_server(arguments: argparse.Namespace, config: BrokerConfig) -> ObservabilityServer | None:
+    port = getattr(arguments, "metrics_port", None)
+    if port is None:
+        return None
+    server = ObservabilityServer(
+        ReadinessService(
+            PostgresHealthCheck(DatabaseConfig(arguments.database_url)), RedpandaHealthCheck(config)
+        ),
+        host=arguments.metrics_host,
+        port=port,
+    )
+    server.start()
+    print(f"observability endpoint listening on http://{arguments.metrics_host}:{port}")
+    return server
+
+
+def _serve_observability(arguments: argparse.Namespace) -> None:
+    config = BrokerConfig(
+        bootstrap_servers=arguments.bootstrap_servers,
+        topic=arguments.topic,
+        group_id=BrokerConfig().group_id,
+    )
+    server = ObservabilityServer(
+        ReadinessService(
+            PostgresHealthCheck(DatabaseConfig(arguments.database_url)), RedpandaHealthCheck(config)
+        ),
+        host=arguments.metrics_host,
+        port=arguments.metrics_port,
+    )
+    print(f"observability endpoint listening on http://{arguments.metrics_host}:{arguments.metrics_port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.close()
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

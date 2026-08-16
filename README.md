@@ -37,4 +37,6 @@ guide](docs/milestone-3.md) documents deterministic in-memory match-state
 projection and the consumer acknowledgement boundary. [The Milestone 4 guide]
 (docs/milestone-4.md) adds durable PostgreSQL snapshots and idempotent recovery
 from Kafka redelivery. The Milestone 5 guide adds bounded poison-event
-quarantine, DLQ operations, and offline projection rebuilds.
+quarantine, DLQ operations, and offline projection rebuilds. [The Milestone 6
+guide](docs/milestone-6.md) adds structured logs, Prometheus metrics, health
+checks, and consumer-lag diagnostics.

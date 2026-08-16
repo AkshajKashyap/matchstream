@@ -3,8 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from prometheus_client import CollectorRegistry, generate_latest
 
 from matchstream.models import CanonicalEvent
+from matchstream.observability.metrics import MatchStreamMetrics
 from matchstream.state import (
     MatchState,
     ProjectionUpdate,
@@ -153,3 +155,46 @@ def test_rebuild_is_deterministic_and_matches_incremental_state() -> None:
 
     assert rebuild_state("match-1", reversed(events)) == incremental
     assert rebuild_state("match-1", events) == rebuild_state("match-1", events)
+
+
+def test_retry_and_poison_quarantine_increment_observability_metrics() -> None:
+    registry = CollectorRegistry()
+    telemetry = MatchStreamMetrics(registry)
+    consumer = _Consumer(_event())
+    projector = _Projector([SequenceGapError("gap"), SequenceGapError("gap")])
+    publisher = _Publisher()
+
+    result = project_next_with_dlq(
+        consumer,
+        projector,
+        publisher,
+        RetryPolicy(max_attempts=2),
+        0.1,
+        observer=telemetry,
+    )
+
+    assert isinstance(result, QuarantinedEvent)
+    exposition = generate_latest(registry).decode()
+    assert "matchstream_retries_total{component=\"projection\",failure_class=\"poison\"} 1.0" in exposition
+    assert "matchstream_dlq_published_total 1.0" in exposition
+    assert "matchstream_offsets_committed_total{result=\"quarantined\"} 1.0" in exposition
+
+
+def test_dlq_publication_failure_has_distinct_metric_and_leaves_offset_uncommitted() -> None:
+    registry = CollectorRegistry()
+    telemetry = MatchStreamMetrics(registry)
+    consumer = _Consumer(_event())
+    projector = _Projector([SequenceGapError("gap")])
+
+    with pytest.raises(RuntimeError, match="DLQ unavailable"):
+        project_next_with_dlq(
+            consumer,
+            projector,
+            _Publisher(fail=True),
+            RetryPolicy(max_attempts=1),
+            0.1,
+            observer=telemetry,
+        )
+
+    assert consumer.commits == 0
+    assert "matchstream_dlq_publish_failures_total 1.0" in generate_latest(registry).decode()

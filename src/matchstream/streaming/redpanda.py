@@ -8,9 +8,13 @@ from math import isfinite
 from typing import Any, Self
 
 from matchstream.models import CanonicalEvent
+from matchstream.observability.logging import get_logger
+from matchstream.observability.metrics import MatchStreamMetrics, metrics
 
 from .contract import EventContractError, deserialize_event, serialize_event
 from .dlq import SourcePosition
+
+logger = get_logger("redpanda")
 
 
 class BrokerConfigurationError(ValueError):
@@ -70,9 +74,12 @@ def match_partition_key(event: CanonicalEvent) -> bytes:
 class RedpandaEventProducer:
     """Publish canonical events through the versioned MatchStream contract."""
 
-    def __init__(self, config: BrokerConfig, client: Any | None = None) -> None:
+    def __init__(
+        self, config: BrokerConfig, client: Any | None = None, observer: MatchStreamMetrics | None = None
+    ) -> None:
         self._config = config
         self._client = client if client is not None else _producer_client(config)
+        self._metrics = observer or metrics()
         self._closed = False
 
     def publish(self, event: CanonicalEvent) -> None:
@@ -93,6 +100,10 @@ class RedpandaEventProducer:
             )
             queued_messages = self._client.flush(self._config.delivery_timeout_seconds)
         except Exception as error:
+            logger.error(
+                "broker_publish_failure",
+                extra={"component": "producer", "operation": "publish", "event_id": event.event_id},
+            )
             raise BrokerTransportError(f"failed to publish event {event.event_id}: {error}") from error
         if delivery_errors:
             raise BrokerTransportError(
@@ -128,12 +139,20 @@ class RedpandaEventProducer:
 class RedpandaEventConsumer:
     """Consume broker messages as validated canonical events."""
 
-    def __init__(self, config: BrokerConfig, client: Any | None = None) -> None:
+    def __init__(
+        self, config: BrokerConfig, client: Any | None = None, observer: MatchStreamMetrics | None = None
+    ) -> None:
+        self._config = config
         self._client = client if client is not None else _consumer_client(config)
+        self._metrics = observer or metrics()
         self._client.subscribe([config.topic])
         self._closed = False
         self._last_message: Any | None = None
         self._last_source_position: SourcePosition | None = None
+        logger.info(
+            "consumer_started",
+            extra={"component": "consumer", "operation": "startup", "consumer_group": config.group_id},
+        )
 
     def poll(self, timeout_seconds: float) -> CanonicalEvent | None:
         if self._closed:
@@ -158,6 +177,20 @@ class RedpandaEventConsumer:
             partition=message.partition(),
             offset=message.offset(),
         )
+        logger.info(
+            "event_received",
+            extra={
+                "component": "consumer",
+                "operation": "poll",
+                "event_id": event.event_id,
+                "match_id": event.match_id,
+                "event_sequence": event.sequence,
+                "topic": message.topic(),
+                "partition": message.partition(),
+                "offset": message.offset(),
+                "consumer_group": self._config.group_id,
+            },
+        )
         return event
 
     @property
@@ -172,8 +205,13 @@ class RedpandaEventConsumer:
         if self._last_message is None:
             raise BrokerTransportError("cannot commit before consuming a valid message")
         try:
-            self._client.commit(message=self._last_message, asynchronous=False)
+            with self._metrics.timer(self._metrics.kafka_commit_duration):
+                self._client.commit(message=self._last_message, asynchronous=False)
         except Exception as error:
+            logger.error(
+                "source_offset_commit_failure",
+                extra={"component": "consumer", "operation": "commit", "consumer_group": self._config.group_id},
+            )
             raise BrokerTransportError(f"failed to commit consumer offset: {error}") from error
 
     def close(self) -> None:
@@ -184,6 +222,10 @@ class RedpandaEventConsumer:
         except Exception as error:
             raise BrokerTransportError(f"failed to close consumer: {error}") from error
         self._closed = True
+        logger.info(
+            "consumer_stopped",
+            extra={"component": "consumer", "operation": "shutdown", "consumer_group": self._config.group_id},
+        )
 
     def __enter__(self) -> Self:
         return self

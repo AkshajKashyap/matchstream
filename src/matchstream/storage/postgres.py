@@ -11,6 +11,8 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from matchstream.models import CanonicalEvent
+from matchstream.observability.logging import get_logger
+from matchstream.observability.metrics import MatchStreamMetrics, metrics
 from matchstream.state.models import MatchState
 from matchstream.state.rebuild import rebuild_state
 from matchstream.streaming.contract import deserialize_event, serialize_event
@@ -19,6 +21,7 @@ from .repository import DurableProjectionResult, Transition
 from .serialization import StateSerializationError, state_from_dict, state_to_dict
 
 DEFAULT_DATABASE_DSN = "postgresql://matchstream:matchstream@localhost:5432/matchstream"
+logger = get_logger("postgres")
 
 
 class DatabaseConfigurationError(ValueError):
@@ -49,8 +52,9 @@ class DatabaseConfig:
 class PostgresProjectionRepository:
     """Persist MatchState snapshots and event identities in PostgreSQL transactions."""
 
-    def __init__(self, config: DatabaseConfig) -> None:
+    def __init__(self, config: DatabaseConfig, observer: MatchStreamMetrics | None = None) -> None:
         self._config = config
+        self._metrics = observer or metrics()
 
     def initialize_schema(self) -> None:
         """Create the minimal schema required by a fresh MatchStream database."""
@@ -87,71 +91,83 @@ class PostgresProjectionRepository:
 
         try:
             with (
+                self._metrics.timer(self._metrics.postgres_duration),
                 psycopg.connect(self._config.dsn) as connection,
                 connection.transaction(),
                 connection.cursor() as cursor,
             ):
-                cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (event.match_id,))
-                cursor.execute(
-                    """
-                    INSERT INTO processed_events (event_id, match_id, sequence)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (event_id) DO NOTHING
-                    RETURNING event_id
-                    """,
-                    (event.event_id, event.match_id, event.sequence),
-                )
-                inserted = cursor.fetchone() is not None
-                cursor.execute(
-                    "SELECT state FROM match_states WHERE match_id = %s FOR UPDATE",
-                    (event.match_id,),
-                )
-                row = cursor.fetchone()
-                previous = (
-                    MatchState.initial(event.match_id)
-                    if row is None
-                    else _decode_state(row[0], event.match_id)
-                )
-                if not inserted:
-                    _ensure_duplicate_matches_event(cursor, event)
-                    if row is None:
-                        raise DurableStorageError(
-                            f"processed event {event.event_id!r} has no durable match state"
-                        )
-                    return DurableProjectionResult(state=previous, applied=False)
+                    cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (event.match_id,))
+                    cursor.execute(
+                        """
+                        INSERT INTO processed_events (event_id, match_id, sequence)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (event_id) DO NOTHING
+                        RETURNING event_id
+                        """,
+                        (event.event_id, event.match_id, event.sequence),
+                    )
+                    inserted = cursor.fetchone() is not None
+                    cursor.execute(
+                        "SELECT state FROM match_states WHERE match_id = %s FOR UPDATE",
+                        (event.match_id,),
+                    )
+                    row = cursor.fetchone()
+                    previous = (
+                        MatchState.initial(event.match_id)
+                        if row is None
+                        else _decode_state(row[0], event.match_id)
+                    )
+                    if not inserted:
+                        _ensure_duplicate_matches_event(cursor, event)
+                        if row is None:
+                            raise DurableStorageError(
+                                f"processed event {event.event_id!r} has no durable match state"
+                            )
+                        return DurableProjectionResult(state=previous, applied=False)
 
-                next_state = transition(previous, event)
-                cursor.execute(
-                    """
-                    INSERT INTO match_states (match_id, state, latest_sequence, last_event_id)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (match_id) DO UPDATE SET
-                        state = EXCLUDED.state,
-                        latest_sequence = EXCLUDED.latest_sequence,
-                        last_event_id = EXCLUDED.last_event_id,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (
-                        next_state.match_id,
-                        Jsonb(state_to_dict(next_state)),
-                        next_state.latest_sequence,
-                        next_state.last_event_id,
-                    ),
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO projection_events (event_id, match_id, sequence, event)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (
-                        event.event_id,
-                        event.match_id,
-                        event.sequence,
-                        Jsonb(json.loads(serialize_event(event))),
-                    ),
-                )
-                return DurableProjectionResult(state=next_state, applied=True)
+                    with self._metrics.timer(self._metrics.state_transition_duration):
+                        next_state = transition(previous, event)
+                    cursor.execute(
+                        """
+                        INSERT INTO match_states (match_id, state, latest_sequence, last_event_id)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (match_id) DO UPDATE SET
+                            state = EXCLUDED.state,
+                            latest_sequence = EXCLUDED.latest_sequence,
+                            last_event_id = EXCLUDED.last_event_id,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (
+                            next_state.match_id,
+                            Jsonb(state_to_dict(next_state)),
+                            next_state.latest_sequence,
+                            next_state.last_event_id,
+                        ),
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO projection_events (event_id, match_id, sequence, event)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (
+                            event.event_id,
+                            event.match_id,
+                            event.sequence,
+                            Jsonb(json.loads(serialize_event(event))),
+                        ),
+                    )
+                    return DurableProjectionResult(state=next_state, applied=True)
         except (psycopg.Error, StateSerializationError) as error:
+            logger.error(
+                "postgres_projection_failure",
+                extra={
+                    "component": "postgres",
+                    "operation": "process_event",
+                    "event_id": event.event_id,
+                    "match_id": event.match_id,
+                    "event_sequence": event.sequence,
+                },
+            )
             raise DurableStorageError(
                 f"could not durably process event {event.event_id!r}: {error}"
             ) from error

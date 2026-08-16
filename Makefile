@@ -1,6 +1,6 @@
 PYTHON ?= $(shell if command -v python >/dev/null; then echo python; elif test -x .venv/bin/python; then echo .venv/bin/python; else echo python3; fi)
 
-.PHONY: install test lint check integration db-init
+.PHONY: install test lint check integration db-init observability-up observability-serve
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -18,3 +18,9 @@ integration:
 
 db-init:
 	$(PYTHON) -m matchstream.streaming.cli init-db
+
+observability-up:
+	docker compose up -d prometheus
+
+observability-serve:
+	$(PYTHON) -m matchstream.streaming.cli serve-observability
