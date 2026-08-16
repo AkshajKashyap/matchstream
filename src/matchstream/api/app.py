@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from dataclasses import asdict
 from typing import Protocol
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import REGISTRY, CollectorRegistry, generate_latest
 
@@ -109,6 +111,13 @@ def create_app(
         version="1.0.0",
         description="Read-only durable match projections and best-effort live state updates.",
         lifespan=lifespan,
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins(),
+        allow_credentials=False,
+        allow_methods=["GET"],
+        allow_headers=["Content-Type"],
     )
 
     @app.middleware("http")
@@ -235,3 +244,15 @@ async def _get_match_or_404(repository: ProjectionRepository, match_id: str):
 def _storage_error(operation: str, error: Exception) -> None:
     logger.error("api_storage_read_failure", extra={"component": "api", "operation": operation})
     raise HTTPException(status_code=503, detail="durable state unavailable") from error
+
+
+def _cors_origins() -> list[str]:
+    """Return explicit dashboard origins; a wildcard is never accepted here."""
+
+    configured = os.environ.get(
+        "MATCHSTREAM_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    )
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    if not origins or "*" in origins:
+        raise ValueError("MATCHSTREAM_CORS_ORIGINS must contain explicit origins, not '*'")
+    return origins

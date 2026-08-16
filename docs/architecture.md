@@ -68,3 +68,21 @@ HTTP API -------------------------------------------------> read committed snaps
 The API owns presentation and best-effort live delivery, never football-state
 correctness or Kafka consumer ownership. PostgreSQL remains authoritative; a
 notification only causes the API to reread durable state before broadcasting.
+
+## Current Milestone 8 dashboard boundary
+
+```text
+                     HTTP: match list, durable snapshot, event history
+PostgreSQL <- FastAPI ------------------------------------------------> React/Vite dashboard
+     ^               |                                                       |
+     |               | WebSocket: snapshot, best-effort state_update         | renders score,
+consumer commit      +-------------------------------------------------------+ timeline, status
+
+```
+
+The dashboard never connects to PostgreSQL, Kafka, or the replay producer.
+It first obtains authoritative data over HTTP, then treats the WebSocket as a
+notification channel. A snapshot replaces local match state after (re)connect;
+state-update sequence gaps trigger an HTTP reconciliation and event-history
+refresh. The timeline is bounded to recent events and does not claim analytics
+the API does not provide.

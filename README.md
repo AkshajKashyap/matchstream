@@ -41,3 +41,34 @@ quarantine, DLQ operations, and offline projection rebuilds. [The Milestone 6
 guide](docs/milestone-6.md) adds structured logs, Prometheus metrics, health
 checks, and consumer-lag diagnostics. [The Milestone 7 guide](docs/milestone-7.md)
 adds the durable-state REST API and best-effort WebSocket updates.
+
+## Milestone 8: dashboard frontend
+
+Milestone 8 adds a separate React, TypeScript, and Vite dashboard in
+[`frontend/`](frontend/). It reads durable state through the existing FastAPI
+HTTP API, then uses its per-match WebSocket only for live notifications. The
+database remains invisible to the browser and remains authoritative.
+
+```text
+PostgreSQL durable projection
+       | HTTP snapshot/history
+       v
+FastAPI API --------------------------> React dashboard
+       | WebSocket snapshot/update              |
+       +-----------------------------------------+
+                         bounded timeline + live status
+```
+
+Start the backend separately, then configure and run the dashboard:
+
+```bash
+cp frontend/.env.example frontend/.env.local
+make frontend-install
+make frontend-dev
+```
+
+The default local origins are `http://localhost:5173` and
+`http://127.0.0.1:5173`. Override them for an explicitly configured deployment
+with `MATCHSTREAM_CORS_ORIGINS`; wildcard origins are deliberately rejected.
+See [the Milestone 8 guide](docs/milestone-8.md) for the frontend contract,
+recovery behavior, limitations, and validation commands.

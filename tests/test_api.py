@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 from prometheus_client import CollectorRegistry, generate_latest
 
-from matchstream.api.app import create_app
+from matchstream.api.app import _cors_origins, create_app
 from matchstream.api.connections import MatchConnectionManager
 from matchstream.models import CanonicalEvent, EntityReference
 from matchstream.observability.metrics import MatchStreamMetrics
@@ -304,3 +304,25 @@ def test_connection_initialization_records_a_pending_notification() -> None:
         return await manager.mark_ready("match-1", connection, 1)
 
     assert asyncio.run(scenario()) is True
+
+
+def test_cors_origins_are_explicit_and_configurable(monkeypatch: Any) -> None:
+    monkeypatch.setenv("MATCHSTREAM_CORS_ORIGINS", "http://dashboard.test, http://localhost:5173")
+    assert _cors_origins() == ["http://dashboard.test", "http://localhost:5173"]
+
+    async def scenario() -> str | None:
+        app, _repository, _notifier, _registry = _application()
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:  # type: ignore[attr-defined]
+            response = await client.get("/api/v1/matches", headers={"Origin": "http://dashboard.test"})
+        return response.headers.get("access-control-allow-origin")
+
+    assert asyncio.run(scenario()) == "http://dashboard.test"
+    monkeypatch.setenv("MATCHSTREAM_CORS_ORIGINS", "*")
+    try:
+        _cors_origins()
+    except ValueError as error:
+        assert "explicit origins" in str(error)
+    else:
+        raise AssertionError("a wildcard CORS origin must be rejected")

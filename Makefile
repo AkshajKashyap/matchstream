@@ -1,6 +1,6 @@
 PYTHON ?= $(shell if command -v python >/dev/null; then echo python; elif test -x .venv/bin/python; then echo .venv/bin/python; else echo python3; fi)
 
-.PHONY: install test lint check integration db-init observability-up observability-serve api websocket-demo
+.PHONY: install test lint check integration db-init observability-up observability-serve api websocket-demo frontend-install frontend-dev frontend-test frontend-build
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -30,3 +30,15 @@ api:
 
 websocket-demo:
 	$(PYTHON) -m matchstream.api.demo_client $(URL)
+
+frontend-install:
+	npm --prefix frontend install
+
+frontend-dev:
+	npm --prefix frontend run dev
+
+frontend-test:
+	npm --prefix frontend test
+
+frontend-build:
+	npm --prefix frontend run build

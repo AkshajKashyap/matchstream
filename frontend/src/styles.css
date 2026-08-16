@@ -1,0 +1,82 @@
+:root {
+  color: #eaf0eb;
+  background: #0d1714;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #0d1714; }
+button { font: inherit; }
+button:focus-visible, summary:focus-visible, a:focus-visible { outline: 3px solid #e1b85a; outline-offset: 3px; }
+
+.app-shell { display: flex; flex-direction: column; max-width: 1440px; height: 100vh; margin: 0 auto; padding: 24px; }
+.site-header { display: flex; align-items: baseline; justify-content: space-between; padding: 0 0 22px; border-bottom: 1px solid #293a33; }
+.wordmark { color: #f5f8f5; font-size: 1.45rem; font-weight: 800; letter-spacing: -.04em; text-decoration: none; }
+.wordmark span { color: #9acc74; }
+.site-header p, .muted { color: #aebcb4; }
+.site-header p { margin: 0; font-size: .9rem; }
+.workspace { display: grid; grid-template-columns: 17rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; align-items: start; gap: 26px; padding-top: 26px; }
+.match-list { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; max-height: 100%; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.section-heading h2, .section-heading .eyebrow { margin: 0; }
+.section-heading h2 { font-size: 1rem; }
+.section-heading > span { color: #9acc74; font-size: .78rem; font-weight: 700; }
+.eyebrow { color: #9acc74; font-size: .74rem; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; }
+.match-list__items { display: grid; flex: 1; min-height: 0; gap: 8px; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; }
+.match-card { width: 100%; padding: 13px; border: 1px solid #293a33; border-radius: 8px; color: #eaf0eb; background: #12211c; text-align: left; cursor: pointer; }
+.match-card:hover { border-color: #5f9666; background: #172a22; }
+.match-card[aria-pressed="true"] { border-color: #9acc74; box-shadow: inset 3px 0 #9acc74; }
+.match-card__teams { display: flex; justify-content: space-between; gap: 8px; line-height: 1.55; }
+.match-card__teams b { color: #f2d07b; }
+.match-card__meta { display: block; margin-top: 8px; color: #aebcb4; font-size: .78rem; }
+.match-card__identifier { display: block; margin-top: 4px; color: #798a80; font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard { align-self: start; min-width: 0; }
+.connection-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 24px; margin-bottom: 12px; color: #c8d4cc; font-size: .8rem; font-weight: 700; letter-spacing: .06em; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa59f; }
+.status-dot--live { background: #9acc74; }
+.status-dot--connecting, .status-dot--reconnecting { background: #e1b85a; }
+.status-dot--disconnected { background: #d07b69; }
+.scoreboard { padding: 25px; border: 1px solid #3c5748; border-radius: 10px; background: #15271f; }
+.scoreboard .eyebrow { margin: 0 0 18px; }
+.scoreboard__teams { display: grid; grid-template-columns: minmax(0, 1fr) 130px minmax(0, 1fr); align-items: center; gap: 16px; }
+.scoreboard__teams > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 1rem; font-weight: 700; }
+.scoreboard__teams > div strong { color: #f6f8f5; font-size: 2rem; }
+.scoreboard__teams > div:last-child { text-align: right; }
+.scoreboard__clock { flex-direction: column; justify-content: center !important; padding: 7px 0; border-right: 1px solid #3c5748; border-left: 1px solid #3c5748; font-size: .78rem !important; font-weight: 600 !important; }
+.scoreboard__clock strong { color: #f2d07b !important; font-size: 1.35rem !important; }
+.dashboard__columns { display: grid; grid-template-columns: minmax(235px, .75fr) minmax(0, 1.25fr); gap: 18px; margin-top: 18px; }
+.panel, .technical-status { padding: 18px; border: 1px solid #293a33; border-radius: 9px; background: #12211c; }
+.stats-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin: 0; }
+.stats-grid div { display: flex; justify-content: space-between; gap: 12px; }
+dt { color: #aebcb4; } dd { margin: 0; text-align: right; font-weight: 700; overflow-wrap: anywhere; }
+.event-counts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 16px; }
+.event-counts span { padding: 4px 7px; border-radius: 4px; color: #d8e4d9; background: #21362c; font-size: .78rem; }
+.event-counts b { color: #f2d07b; }
+.technical-status { margin-top: 18px; color: #dce6dd; }
+.technical-status summary { cursor: pointer; font-weight: 700; }
+.technical-status dl { display: grid; gap: 10px; margin: 16px 0 0; font-size: .84rem; }
+.technical-status dl div { display: flex; justify-content: space-between; gap: 16px; }
+.timeline ol { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.timeline li { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 12px; padding: 12px 0; border-top: 1px solid #293a33; }
+.timeline time { color: #9acc74; font-size: .8rem; }
+.timeline li div { display: grid; gap: 3px; }
+.timeline li span { color: #aebcb4; font-size: .88rem; }
+.inline-error { color: #f0a192; font-size: .86rem; }
+.dashboard-status { display: grid; place-items: center; align-content: center; min-height: 45vh; gap: 14px; color: #eaf0eb; text-align: center; }
+.dashboard-status p { margin: 0; }
+.dashboard-status button { padding: 9px 13px; border: 1px solid #9acc74; border-radius: 6px; color: #102015; background: #9acc74; cursor: pointer; font-weight: 800; }
+
+@media (max-width: 780px) {
+  .app-shell { min-height: 100vh; height: auto; padding: 16px; }
+  .site-header { align-items: flex-start; gap: 10px; flex-direction: column; }
+  .workspace, .dashboard__columns { grid-template-columns: 1fr; }
+  .workspace { grid-template-rows: auto; flex: none; gap: 20px; }
+  .match-list { display: block; height: auto; max-height: none; }
+  .match-list__items { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); overflow: visible; padding-right: 0; }
+  .scoreboard { padding: 18px 14px; }
+  .scoreboard__teams { grid-template-columns: 1fr 78px 1fr; gap: 8px; }
+  .scoreboard__teams > div { font-size: .86rem; }
+  .scoreboard__teams > div strong { font-size: 1.5rem; }
+  .timeline li { grid-template-columns: 92px minmax(0, 1fr); }
+}
